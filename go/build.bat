@@ -1,0 +1,6 @@
+@echo off
+setlocal
+cd /d "%~dp0"
+go generate ./...
+if errorlevel 1 exit /b %errorlevel%
+go test ./...
