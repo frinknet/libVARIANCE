@@ -5,64 +5,9 @@ FILE *vcore_out = NULL;
 FILE *vcore_err = NULL;
 
 /* Core Configuration */
-const char    **vcore_keywords  = (const char*[]) {"TODO","FIXME","BUG","HACK", NULL};
-
-const char    *vcore_apiurl   = "https://openrouter.ai/api/v1/chat/completions";
-const char    *vcore_apikey;
-const char    *vcore_model    = "openrouter/free";
-const char    *vcore_instruct = "You are a {{language}} Software Architect focused on finding the most concise way to build {{goals}}";
-
-int           vcore_timeout   = 9000;
-int           vcore_tokens    = 9000;
-int           vcore_pause     = 3;
-int           vcore_tries     = 10;
-
-double        vcore_temp      = 0.1;
-
-/* Info Configuration */
-const char    **vinfo_keywords = NULL;
-
-const  char   *vinfo_apiurl    = NULL;
-const char    *vinfo_apikey    = NULL;
-const char    *vinfo_model     = NULL;
-const  char   *vinfo_instruct  = "You are a {{language}} coding agent focused ONLY on addressing {{keywords}} comments. Return with FULL fixed file ONLY!!! ({{filename}})";
-
-int           vinfo_timeout    = 0;
-int           vinfo_tokens     = 0;
-int           vinfo_tries      = 0;
-int           vinfo_pause      = 0;
-
-double        vinfo_temp       = 0.0;
-
-/* Mark Configuration */
-const char    **vmark_keywords = NULL;
-
-const  char   *vmark_apiurl    = NULL;
-const char    *vmark_apikey    = NULL;
-const char    *vmark_model     = NULL;
-const  char   *vmark_instruct  = "You are a {{language}} coding agent focused ONLY on addressing {{keywords}} comments. Return with FULL fixed file ONLY!!! ({{filename}})";
-
-int           vmark_timeout    = 0;
-int           vmark_tokens     = 0;
-int           vmark_tries      = 0;
-int           vmark_pause      = 0;
-
-double        vmark_temp       = 0.0;
-
-/* Code Configuration */
-const char    **vcode_keywords = NULL;
-
-const  char   *vcode_apiurl    = NULL;
-const char    *vcode_apikey    = NULL;
-const char    *vcode_model     = NULL;
-const  char   *vcode_instruct  = "You are a {{language}} coding agent focused ONLY on addressing {{keywords}} comments. Return with FULL fixed file ONLY!!! ({{filename}})";
-
-int           vcode_timeout    = 0;
-int           vcode_tokens     = 0;
-int           vcode_tries      = 0;
-int           vcode_pause      = 0;
-
-double        vcode_temp       = 0.0;
+#define X(mode, name, ctype, value) ctype v##mode##_##name = value;
+#include "../x/prompts.x"
+#undef X
 
 // detect file type from filename extension
 vfiletype_t v_filetype(const char *filename) {
@@ -70,7 +15,7 @@ vfiletype_t v_filetype(const char *filename) {
 	const char *extstr = ext ? ext : "";
 
 	#define X(lang, exts, mark) if ((*extstr && strstr(exts, extstr)) || strstr(exts, filename)) return V_FTYPE_##lang;
-	#include "filetypes.x"
+	#include "../x/filetypes.x"
 	#undef X
 
 	return V_FTYPE_NONE;
@@ -82,7 +27,7 @@ const char *v_filelang(const char *filename) {
 
 	#define X(lang, exts, mark) case V_FTYPE_##lang: return #lang;
 	switch(t) {
-	#include "filetypes.x"
+	#include "../x/filetypes.x"
 	default: return "text";
 	}
 	#undef X
@@ -94,7 +39,7 @@ const char *v_filemark(const char *filename) {
 
 	#define X(lang, exts, mark) case V_FTYPE_##lang: return mark;
 	switch(t) {
-	#include "filetypes.x"
+	#include "../x/filetypes.x"
 	default: return "";
 	}
 	#undef X

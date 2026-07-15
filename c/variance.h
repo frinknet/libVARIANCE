@@ -15,70 +15,16 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <errno.h>
 #include "peanuts.h"
 
 extern FILE *vcore_out;
 extern FILE *vcore_err;
 
 /* Core Configuration */
-extern const char    **vcore_keywords;
-extern const char    *vcore_apiurl;
-extern const char    *vcore_apikey;
-extern const char    *vcore_model;
-extern const char    *vcore_instruct;
-extern int           vcore_timeout;
-extern int           vcore_tokens;
-extern int           vcore_pause;
-extern int           vcore_tries;
-extern double        vcore_temp;
-
-/* Info Configuration */
-extern const char    **vinfo_keywords;
-extern const  char   *vinfo_apiurl;
-extern const char    *vinfo_apikey;
-extern const char    *vinfo_model;
-extern const  char   *vinfo_instruct;
-extern int           vinfo_timeout;
-extern int           vinfo_tokens;
-extern int           vinfo_tries;
-extern int           vinfo_pause;
-extern double        vinfo_temp;
-
-/* Mark Configuration */
-extern const char    **vmark_keywords;
-extern const  char   *vmark_apiurl;
-extern const char    *vmark_apikey;
-extern const char    *vmark_model;
-extern const  char   *vmark_instruct;
-extern int           vmark_timeout;
-extern int           vmark_tokens;
-extern int           vmark_tries;
-extern int           vmark_pause;
-extern double        vmark_temp;
-
-/* Code Configuration */
-extern const char    **vcode_keywords;
-extern const  char   *vcode_apiurl;
-extern const char    *vcode_apikey;
-extern const char    *vcode_model;
-extern const  char   *vcode_instruct;
-extern int           vcode_timeout;
-extern int           vcode_tokens;
-extern int           vcode_tries;
-extern int           vcode_pause;
-extern double        vcode_temp;
-
-/* Plan Configuration */
-extern const char    **vplan_keywords;
-extern const  char   *vplan_apiurl;
-extern const char    *vplan_apikey;
-extern const char    *vplan_model;
-extern const  char   *vplan_instruct;
-extern int           vplan_timeout;
-extern int           vplan_tokens;
-extern int           vplan_tries;
-extern int           vplan_pause;
-extern double        vplan_temp;
+#define X(mode, name, ctype, value) extern ctype v##mode##_##name;
+#include "../x/prompts.x"
+#undef X
 
 // populate a nutmeg context from act values
 #define V_NUTMEG(ctx, act) do { \
@@ -325,7 +271,7 @@ static inline char *vfence_clr(char *buf) {
 typedef enum {
 	V_FTYPE_NONE,
 	#define X(lang, exts, mark) V_FTYPE_##lang,
-	#include "filetypes.x"
+	#include "../x/filetypes.x"
 	#undef X
 } vfiletype_t;
 
