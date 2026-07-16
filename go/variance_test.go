@@ -11,13 +11,13 @@ import (
 )
 
 func TestLoadPrompts(t *testing.T) {
-	path := filepath.Join("..", "x", "prompts.x")
-	prompts, err := LoadPrompts(path)
+	path := filepath.Join("..", "x", "configure.x")
+	config, err := LoadPrompts(path)
 	if err != nil {
 		t.Fatalf("LoadPrompts failed: %v", err)
 	}
 
-	core := prompts["core"]
+	core := config["core"]
 	if core.Model != "openrouter/free" {
 		t.Fatalf("core model = %q", core.Model)
 	}

@@ -14,7 +14,7 @@ func loadXConfig() ([]FileType, map[string]Config, error) {
 	if err := loadFiletypes(&fileTypes, "../x/filetypes.x"); err != nil {
 		return nil, nil, err
 	}
-	if err := loadPrompts(&configs, "../x/prompts.x"); err != nil {
+	if err := loadPrompts(&configs, "../x/configure.x"); err != nil {
 		return nil, nil, err
 	}
 	return fileTypes, configs, nil
