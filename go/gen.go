@@ -14,7 +14,7 @@ func main() {
 	if err := validateFile("../x/filetypes.x", 3); err != nil {
 		panic(err)
 	}
-	if err := validateFile("../x/configure.x", 4); err != nil {
+	if err := validateFile("../x/prompts.x", 4); err != nil {
 		panic(err)
 	}
 
@@ -40,7 +40,7 @@ func main() {
 	fmt.Fprintln(out, "\tif err := loadFiletypes(&fileTypes, \"../x/filetypes.x\"); err != nil {")
 	fmt.Fprintln(out, "\t\treturn nil, nil, err")
 	fmt.Fprintln(out, "\t}")
-	fmt.Fprintln(out, "\tif err := loadPrompts(&configs, \"../x/configure.x\"); err != nil {")
+	fmt.Fprintln(out, "\tif err := loadPrompts(&configs, \"../x/prompts.x\"); err != nil {")
 	fmt.Fprintln(out, "\t\treturn nil, nil, err")
 	fmt.Fprintln(out, "\t}")
 	fmt.Fprintln(out, "\treturn fileTypes, configs, nil")

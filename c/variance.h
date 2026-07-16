@@ -2,6 +2,10 @@
 #ifndef VARIANCE_H
 #define VARIANCE_H
 
+/* libVARIANCE - Vibecode Attention Records for Internal Analysis Notes and Code Exegesis */
+/* Header-only: #include "variance.h" and you're done — no .c to compile. */
+/* Requires: libPEANUTS (peanuts.h) */
+
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
@@ -17,34 +21,9 @@
 extern FILE *vcore_out;
 extern FILE *vcore_err;
 
-#ifndef VCONFIGURE
-#define VCONFIGURE "../x/configure.x"
-#endif /* VCONFIGURE */
-
-#include VCONFIGURE
-
-#define VMODE(mode, MODE) \
-	X(mode, keywords,  const char**, V##MODE##_KEYWORDS) \
-	X(mode, apiurl,    const char*,  V##MODE##_APIURL) \
-	X(mode, apikey,    const char*,  V##MODE##_APIKEY) \
-	X(mode, model,     const char*,  V##MODE##_MODEL) \
-	X(mode, instruct,  const char*,  V##MODE##_INSTRUCT) \
-	X(mode, timeout,   int,          V##MODE##_TIMEOUT) \
-	X(mode, tokens,    int,          V##MODE##_TOKENS) \
-	X(mode, tries,     int,          V##MODE##_TRIES) \
-	X(mode, pause,     int,          V##MODE##_PAUSE) \
-	X(mode, temp,      double,       V##MODE##_TEMP) \
-
-#define VMODEX \
-	VMODE(core, CORE) \
-	VMODE(info, INFO) \
-	VMODE(mark, MARK) \
-	VMODE(code, CODE) \
-	VMODE(plan, PLAN)
-
 /* Core Configuration */
 #define X(mode, name, ctype, value) extern ctype v##mode##_##name;
-VMODEX
+#include "../x/prompts.x"
 #undef X
 
 // populate a nutmeg context from act values
@@ -146,7 +125,7 @@ static inline size_t v_bufwrite(char **buf, size_t *len, const char *s, size_t *
 		*max = 128;
 		*buf = malloc(*max);
 
-		if (!*buf) v_die(VFILE_NOTICE_DEAD);
+		if (!*buf) v_die("Out of memory.");
 	}
 
 	size_t beg = *len;
@@ -157,7 +136,7 @@ static inline size_t v_bufwrite(char **buf, size_t *len, const char *s, size_t *
 			*max *= 2;
 			*buf = (char *)realloc(*buf, *max);
 
-			if (!*buf) v_die(VFILE_NOTICE_DEAD);
+			if (!*buf) v_die("Out of memory.");
 		}
 
 		(*buf)[(*len)++] = *p++;
@@ -173,7 +152,7 @@ static inline size_t v_bufstream(char **buf, size_t *len, FILE *s, size_t *max, 
 		*len = 0;
 		*max = 128;
 		*buf = malloc(*max);
-		if (!*buf) v_die(VFILE_NOTICE_DEAD);
+		if (!*buf) v_die("Out of memory.");
 	}
 
 	size_t beg = *len;
@@ -190,7 +169,7 @@ static inline size_t v_bufstream(char **buf, size_t *len, FILE *s, size_t *max, 
 				*max = (*len + n + 16) * 2;
 				*buf = (char *)realloc(*buf, *max);
 
-				if (!*buf) v_die(VFILE_NOTICE_DEAD);
+				if (!*buf) v_die("Out of memory.");
 			}
 
 			memcpy(*buf + *len, num, n);
@@ -203,7 +182,7 @@ static inline size_t v_bufstream(char **buf, size_t *len, FILE *s, size_t *max, 
 			*max *= 2;
 			*buf = (char *)realloc(*buf, *max);
 
-			if (!*buf) v_die(VFILE_NOTICE_DEAD);
+			if (!*buf) v_die("Out of memory.");
 		}
 
 		(*buf)[(*len)++] = (char)c;
@@ -319,15 +298,28 @@ char *v_todomark(const char *orig, vtodo_t *todos, const char *mk, size_t cnt);
 
 /* Infromation Subsystem */
 typedef enum {
-	VINFO_NODATA,
 	VINFO_SEARCH,
 	VINFO_REVIEW,
 	VINFO_DIGEST,
 	VINFO_MEMORY,
 	VINFO_FORGET,
 	VINFO_GENIUS,
-	VINFO_ANSWER
+	VINFO_ANSWER,
+	VINFO_OTHERS
 } vinfotype_t;
+
+#define INFO_TEMPLATES \
+	"Respond with these lines and I'll help you:\n" \
+	"\n" \
+	"- `search|path|words`    Locate words in the code\n" \
+	"- `review|path|query`    Inspect source from a file\n" \
+	"- `digest|path|notes`    Write a digest of the file\n" \
+	"- `memory|topic|thought` Save a memory for future you\n" \
+	"- `forget|topic|thought` Remove a memory for future you\n" \
+	"- `genius|source|query`   Get advice from top experts\n" \
+	"- `answer|subject|ideas` Explain your thought to the user\n" \
+	"\n" \
+	"Lines must be this format or I'll discard them..."
 
 char *v_infolist(const char **files, int n, const char *note);
 char *v_infoshow(const char **files, int n, const char *note);
@@ -344,11 +336,23 @@ typedef struct {
 	char  note[1024];
 } vmark_t;
 
-int v_markscan(const char *src, const char *kw[], const char *mk, char **list);
 char *v_marklist(const char **files, int n, const char **kw);
 char *v_markeach(const char **files, int n, const char *goal);
 
 /* Code Generation */
+#define CODE_TEMPLATES \
+	"Respond with as many of these lines as you need:\n" \
+	"\n" \
+	"`search|path|terms` - Search a portion of the codebase\n" \
+	"`review|path|notes` - Show the source code of a file\n" \
+	"`digest|path|notes` - Write a digest of the file\n" \
+	"`memory|topic|notes` - Save a memory for future you\n" \
+	"`forget|topic|notes` - Remove a memory for future you\n" \
+	"`answer|path|notes` - Explain why the file fits\n" \
+	"\n" \
+	"Any other lines will be discarded..."
+
+int v_codescan(const char *src, const char *kw[], const char *mk, char **list);
 char *v_codefind(const char *quest);
 char *v_codemove(const char *quest);
 int v_codefile(const char *filename, const char *goal);
@@ -362,5 +366,92 @@ extern char *v_tasktodo(const char **files, int n, const char *goal);
 extern char *v_tasknext(const char **files, int n, const char *goal);
 extern char *v_tasktest(const char **files, int n, const char *goal);
 extern char *v_taskedit(const char **files, int n, const char *goal);
+
+/* Internal Tools */
+static inline void _vtool_dive(const char *path, char **buf, size_t *len, size_t *max, int depth) {
+	DIR *dir;
+	struct dirent *entry;
+	struct stat statbuf;
+
+	if (!(dir = opendir(path))) return;
+
+	while ((entry = readdir(dir)) != NULL) {
+		char fullpath[1024];
+
+		snprintf(fullpath, sizeof(fullpath), "%s/%s", path, entry->d_name);
+
+		if (lstat(fullpath, &statbuf) < 0) continue;
+		if (S_ISDIR(statbuf.st_mode)) {
+			if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+			if (entry->d_name[0] == '.') continue; // skip hidden dirs
+			if (depth > 3) continue; // max depth
+
+			_vtool_dive(fullpath, buf, len, max, depth + 1);
+		} else {
+			if (entry->d_name[0] == '.') continue; // skip hidden files
+
+			v_bufwrite(buf, len, fullpath, max);
+			v_bufwrite(buf, len, "\n", max);
+		}
+	}
+
+	closedir(dir);
+}
+
+static inline char *_vtool_find(const char *path) {
+	char *buf = NULL;
+	size_t len = 0;
+	size_t max = 128;
+
+	_vtool_dive(path ? path : ".", &buf, &len, &max, 0);
+
+	if (buf) buf[len] = '\0';
+
+	return buf;
+}
+
+static inline char *_vtool_grep(const char *term, const char *path) {
+	char *files = _vtool_find(path);
+
+	if (!files) return NULL;
+
+	char *result = NULL;
+	size_t rlen = 0;
+	size_t rmax = 1024;
+	int found_any = 0;
+	char *fline = files;
+	char *fnext;
+
+	while ((fnext = strchr(fline, '\n')) != NULL) {
+		*fnext = '\0';
+
+		if (strlen(fline) > 0) {
+			char *content = v_fileload(fline);
+
+			if (content) {
+				if (strstr(content, term)) {
+					if (!found_any) found_any = 1;
+
+					v_bufwrite(&result, &rlen, fline, &rmax);
+					v_bufwrite(&result, &rlen, "\n", &rmax);
+				}
+
+				free(content);
+			}
+		}
+
+		fline = fnext + 1;
+	}
+
+	free(files);
+
+	if (!found_any) {
+		free(result);
+
+		return NULL;
+	}
+
+	return result;
+}
 
 #endif /* VARIANCE_H */
