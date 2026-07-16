@@ -1,4 +1,4 @@
-# libVARIANCE
+# libVARIANCE 🧬
 
 _A fancy way of saying **"VIBECODING IN A BOTTLE"**... Single lib for small mdel vibecoding without CoT Token bloat._
 
