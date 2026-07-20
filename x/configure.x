@@ -31,7 +31,7 @@
 #define VINFO_ENDPOINT 	VCORE_ENDPOINT
 #define VINFO_APIKEY   	VCORE_APIKEY
 #define VINFO_MODEL    	VCORE_MODEL
-#define VINFO_INSTRUCT  "You are a {{language}} coding agent focused ONLY on addressing {{keywords}} comments. Return with FULL fixed file ONLY!!! ({{filename}})"
+#define VINFO_INSTRUCT  "You are a {{language}} code research and review specialist ready to explain advanced concepts using simple analogies."
 #define VINFO_TIMEOUT  	VCORE_TIMEOUT
 #define VINFO_TOKENS    1000
 #define VINFO_TRIES    	VCORE_TRIES
@@ -154,7 +154,7 @@
 	"- [ ] specifics of another task with reason\n" \
 	"  - `path/file3`\n" \
 	"\n" \
-	"Further technicall notes and consideration\n" \
+	"Further technical notes and considerations\n" \
 	"\n" \
 	"The plan must include:\n" \
 	"- A clear summary heading\n" \

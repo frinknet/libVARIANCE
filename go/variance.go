@@ -16,9 +16,22 @@ import (
 	peanuts "github.com/frinknet/libPEANUTS"
 )
 
+// Output writers, matching C's vcore_out / vcore_err globals.
+var VOut io.Writer = os.Stdout
+var VErr io.Writer = os.Stderr
+
+// vOut prints to VOut with the same format as C's v_out().
+func vOut(format string, args ...interface{}) {
+	if VOut == nil {
+		return
+	}
+	msg := fmt.Sprintf(format, args...)
+	fmt.Fprintf(VOut, "%s\n\n", msg)
+}
+
 type Config struct {
 	Keywords []string
-	APIURL   string
+	Endpoint string
 	APIKey   string
 	Model    string
 	Instruct string
@@ -29,97 +42,33 @@ type Config struct {
 	Temp     float64
 }
 
-var configs map[string]Config
+var (
+	// Configs holds the mode-keyed configuration, baked in from x/configure.x.
+	// Override in your own init() to use custom configs:
+	//
+	//	func init() { libvariance.Configs = myConfigs }
+	Configs  map[string]Config
+
+	// FileTypes holds the file-type mappings, baked in from x/filetypes.x.
+	// Override in your own init() to use custom mappings:
+	//
+	//	func init() { libvariance.FileTypes = myFileTypes }
+	FileTypes []FileType
+)
 
 func init() {
 	var err error
-	fileTypes, configs, err = loadXConfig()
+	FileTypes, Configs, err = loadXConfig()
 	if err != nil {
 		panic(err)
 	}
 }
 
-func LoadPrompts(path string) (map[string]Config, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
+func configFor(mode string) Config {
+	if Configs == nil {
+		return Config{}
 	}
-	defer f.Close()
-
-	out := map[string]Config{}
-	scanner := bufio.NewScanner(f)
-	lineNo := 0
-	for scanner.Scan() {
-		lineNo++
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "//") {
-			continue
-		}
-
-		args := splitXArgs(line)
-		if len(args) != 4 {
-			return nil, fmt.Errorf("%s:%d: expected X(mode, name, ctype, value), got %q", path, lineNo, line)
-		}
-		mode := cleanXName(args[0])
-		name := strings.TrimSpace(args[1])
-		ctype := strings.TrimSpace(args[2])
-		value := trimXValue(args[3])
-		key := name
-		cfg := out[mode]
-		switch {
-		case key == "keywords" && ctype == "const char**":
-			cfg.Keywords = splitList(value)
-		case ctype == "const char*":
-			switch key {
-			case "apiurl":
-				cfg.APIURL = value
-			case "apikey":
-				cfg.APIKey = value
-			case "model":
-				cfg.Model = value
-			case "instruct":
-				cfg.Instruct = value
-			}
-		case ctype == "int":
-			switch key {
-			case "timeout":
-				cfg.Timeout = atoi(value)
-			case "tokens":
-				cfg.Tokens = atoi(value)
-			case "tries":
-				cfg.Tries = atoi(value)
-			case "pause":
-				cfg.Pause = atoi(value)
-			}
-		case ctype == "double":
-			if key == "temp" {
-				cfg.Temp = atof(value)
-			}
-		}
-		out[mode] = cfg
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func configFor(name string) Config {
-	cfg := Config{}
-	if configs != nil {
-		cfg = configs[name]
-	}
-	switch name {
-	case "info":
-		cfg.Instruct = "You are a {{language}} coding agent focused ONLY on addressing {{keywords}} comments. Return with FULL fixed file ONLY!!! ({{filename}})"
-	case "mark":
-		cfg.Instruct = "You are a {{language}} coding agent focused ONLY on addressing {{keywords}} comments. Return with FULL fixed file ONLY!!! ({{filename}})"
-	case "code":
-		cfg.Instruct = "You are a {{language}} coding agent focused ONLY on addressing {{keywords}} comments. Return with FULL fixed file ONLY!!! ({{filename}})"
-	case "plan":
-		cfg.Instruct = "You are a {{language}} coding agent focused ONLY on addressing {{keywords}} comments. Return with FULL fixed file ONLY!!! ({{filename}})"
-	}
-	return cfg
+	return Configs[mode]
 }
 
 func CoreConfig() Config {
@@ -144,8 +93,8 @@ func PlanConfig() Config {
 
 func (c Config) WithDefaults() Config {
 	core := CoreConfig()
-	if c.APIURL == "" {
-		c.APIURL = core.APIURL
+	if c.Endpoint == "" {
+		c.Endpoint = core.Endpoint
 	}
 	if c.APIKey == "" {
 		c.APIKey = core.APIKey
@@ -183,7 +132,7 @@ func NutmegFor(name string, fallback Config) *peanuts.Nutmeg {
 	case "plan":
 		cfg = PlanConfig().WithDefaults()
 	}
-	ctx := peanuts.NewNutmeg(cfg.Model, cfg.APIURL, cfg.APIKey)
+	ctx := peanuts.NewNutmeg(cfg.Model, cfg.Endpoint, cfg.APIKey)
 	ctx.Timeout = cfg.Timeout
 	ctx.Tokens = cfg.Tokens
 	ctx.Tries = cfg.Tries
@@ -218,81 +167,10 @@ type FileType struct {
 	Mark string
 }
 
-var fileTypes []FileType
-
-func init() {
-	var err error
-	fileTypes, configs, err = loadXConfig()
-	if err != nil {
-		panic(err)
-	}
-}
-
-func defaultFileTypesPath() string {
-	return filepath.Join("..", "x", "filetypes.x")
-}
-
-func LoadFileTypes(path string) ([]FileType, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	var out []FileType
-	scanner := bufio.NewScanner(f)
-	lineNo := 0
-	for scanner.Scan() {
-		lineNo++
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "//") {
-			continue
-		}
-
-		parts := strings.Split(line, ",")
-		if len(parts) != 3 {
-			return nil, fmt.Errorf("%s:%d: expected X(lang, exts, mark), got %q", path, lineNo, line)
-		}
-
-		lang := cleanXName(parts[0])
-		exts := strings.TrimSpace(parts[1])
-		mark := strings.TrimSpace(parts[2])
-		mark = strings.TrimSuffix(mark, ")")
-		mark = strings.TrimRight(mark, " ")
-		mark = strings.Trim(mark, "\"")
-		mark = strings.TrimSpace(mark)
-		if lang == "" || exts == "" || mark == "" {
-			return nil, fmt.Errorf("%s:%d: empty X fields", path, lineNo)
-		}
-
-		out = append(out, FileType{Lang: lang, Ext: exts, Mark: mark})
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func cleanXName(value string) string {
 	value = strings.TrimSpace(value)
 	value = strings.TrimPrefix(value, "X(")
 	return strings.TrimSuffix(value, ")")
-}
-
-func splitList(value string) []string {
-	value = strings.TrimSpace(value)
-	value = strings.TrimSuffix(value, ";")
-	value = strings.Trim(value, "{}")
-	value = strings.ReplaceAll(value, "\"", "")
-	parts := strings.Split(value, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" && !strings.EqualFold(part, "NULL") {
-			out = append(out, part)
-		}
-	}
-	return out
 }
 
 func atoi(value string) int {
@@ -305,19 +183,19 @@ func atof(value string) float64 {
 	return f
 }
 
-func FileTypes() []FileType {
-	out := make([]FileType, len(fileTypes))
-	copy(out, fileTypes)
+func GetFileTypes() []FileType {
+	out := make([]FileType, len(FileTypes))
+	copy(out, FileTypes)
 	return out
 }
 
 func VFileType(filename string) FileType {
-	for _, ft := range fileTypes {
+	for _, ft := range FileTypes {
 		if ft.Match(filename) {
 			return ft
 		}
 	}
-	return FileType{Lang: "none"}
+	return FileType{Lang: "text"}
 }
 
 func (ft FileType) Match(filename string) bool {
@@ -356,6 +234,14 @@ func FileList(src string, n int) []string {
 	out := make([]string, 0, n)
 	fields := strings.FieldsFunc(src, func(r rune) bool { return r == '|' || r == '\n' })
 	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		// Strip " ⟵ " summary suffix (matches C's v_filelist behavior)
+		if idx := strings.Index(field, " ⟵ "); idx >= 0 {
+			field = field[:idx]
+		}
 		field = strings.TrimSpace(field)
 		if field == "" {
 			continue
@@ -470,6 +356,9 @@ func VCodefile(filename, goal string) error {
 }
 
 func VTaskinfo(files []string, goal string) (string, error) {
+	if goal != "" {
+		vOut(VTASK_NOTICE_INFO, goal)
+	}
 	if len(files) == 0 && goal == "" {
 		return InfoList(nil, ""), nil
 	}
@@ -481,68 +370,131 @@ func VTaskinfo(files []string, goal string) (string, error) {
 
 func VTaskmark(files []string, goal string) (string, error) {
 	if goal != "" {
+		vOut(VTASK_NOTICE_MARK, goal)
 		return MarkEach(files, goal)
+	}
+	if len(files) == 0 {
+		return MarkList(nil, MarkConfig().Keywords), nil
 	}
 	return MarkList(files, MarkConfig().Keywords), nil
 }
 
 func VTaskcode(files []string, goal string) (string, error) {
 	if len(files) == 0 {
-		return "No files processed", nil
+		return "", nil
+	}
+
+	if goal != "" {
+		vOut(VTASK_NOTICE_CODE, goal)
+	}
+
+	// Call markeach/marklist as a side effect (result discarded, matching C behavior).
+	if len(files) > 1 {
+		if goal != "" {
+			vOut(VTASK_NOTICE_MARK, goal)
+			_, _ = MarkEach(files, goal)
+		} else {
+			_ = MarkList(files, MarkConfig().Keywords)
+		}
+	}
+
+	for _, file := range files {
+		_ = CodeFile(file, goal)
 	}
 
 	var result strings.Builder
-	if len(files) > 1 {
-		if mark, err := MarkEach(files, goal); err == nil {
-			result.WriteString(mark)
-			result.WriteByte('\n')
-		}
+	if summaries := toolSummary(files); summaries != "" {
+		result.WriteString("# " + VINFO_LABEL_EDITED + "\n")
+		result.WriteString(summaries)
 	}
-
-	success := 0
-	fail := 0
-	for _, file := range files {
-		if err := CodeFile(file, goal); err != nil {
-			fail++
-			result.WriteString("✗ Failed: ")
-			result.WriteString(file)
-			result.WriteByte('\n')
-		} else {
-			success++
-			result.WriteString("✓ Updated: ")
-			result.WriteString(file)
-			result.WriteByte('\n')
-		}
+	if goal != "" {
+		result.WriteByte('\n')
+		result.WriteString(goal)
+		result.WriteByte('\n')
 	}
-	result.WriteString(fmt.Sprintf("\nProcessed %d files: %d succeeded, %d failed\n", len(files), success, fail))
 	return result.String(), nil
 }
 
 func VTaskplan(files []string, goal string) string {
-	return "Plan functionality not yet implemented"
+	if len(files) > 1 {
+		PlanTask(files, goal)
+	} else if goal != "" {
+		PlanMore(goal)
+	}
+	content, _ := FileLoad(VFILENAME_PLAN)
+	return content
 }
 
 func VTasktodo(files []string, goal string) string {
-	return "Todo functionality not yet implemented"
+	return PlanTodo(files, goal)
+}
+
+func vMarkscan(src string, kw []string, mk string) (string, int) {
+	var b strings.Builder
+	lineNo := 1
+	scanner := bufio.NewScanner(strings.NewReader(src))
+	count := 0
+	for scanner.Scan() {
+		line := scanner.Text()
+		mark := TodoLine(line, kw, mk)
+		if mark == "" {
+			lineNo++
+			continue
+		}
+		count++
+		fmt.Fprintf(&b, "%d. %s\n", count, mark)
+		lineNo++
+	}
+	if err := scanner.Err(); err != nil {
+		return "", 0
+	}
+	if count == 0 {
+		return "", 0
+	}
+	return b.String(), count
+}
+
+func VTaskauto(files []string, goal string) string {
+	if goal != "" {
+		PlanMore(goal)
+	}
+	plan := PlanLoad()
+	PlanExec(plan)
+	return PlanTodo(files, goal)
+}
+
+func VTaskdone(files []string, goal string) string {
+	if goal == "" {
+		goal = VPLAN_REVIEW_DELETION
+	}
+	rpt := PlanTodo(files, goal)
+	PlanWipe()
+	return rpt
 }
 
 func VTasknext(files []string, goal string) string {
-	return "Next task functionality not yet implemented"
+	if goal != "" {
+		PlanMore(goal)
+	}
+	plan := PlanLoad()
+	PlanNext(plan)
+	return PlanTodo(files, goal)
 }
 
 func VTasktest(files []string, goal string) string {
-	return "Test functionality not yet implemented"
+	_ = files
+	if goal != "" {
+		vOut(VTASK_NOTICE_TEST, goal)
+	}
+	return VTASK_NOTICE_NONE
 }
 
 func VTaskedit(files []string, goal string) string {
-	var b strings.Builder
-	b.WriteString("Opening files in editor:\n")
-	for _, file := range files {
-		b.WriteString("  ")
-		b.WriteString(file)
-		b.WriteByte('\n')
+	_ = files
+	if goal != "" {
+		vOut(VTASK_NOTICE_EDIT, goal)
 	}
-	return b.String()
+	return VTASK_NOTICE_NONE
 }
 
 func FileInst(filename string, kw []string, inst string) string {
@@ -558,7 +510,7 @@ func FileInst(filename string, kw []string, inst string) string {
 	).Replace(inst)
 }
 
-func WithLineNumbers(src string) string {
+func withLineNumbers(src string) string {
 	if src == "" {
 		return ""
 	}
@@ -573,7 +525,7 @@ func WithLineNumbers(src string) string {
 	return b.String()
 }
 
-func VToolFind(path string) string {
+func vToolFind(path string) string {
 	var b strings.Builder
 	if path == "" {
 		path = "."
@@ -582,7 +534,7 @@ func VToolFind(path string) string {
 	return b.String()
 }
 
-func VToolGrep(term, path string) string {
+func vToolGrep(term, path string) string {
 	var b strings.Builder
 	if path == "" {
 		path = "."
@@ -644,6 +596,19 @@ type Todo struct {
 	Note string
 }
 
+type Step struct {
+	Done  bool
+	Task  string
+	Files []string
+}
+
+type Plan struct {
+	Title string
+	Goals string
+	Notes string
+	Steps []Step
+}
+
 func TodoLine(line string, kw []string, mk string) string {
 	mk1, _ := splitMarker(mk)
 	if mk1 == "" {
@@ -652,10 +617,10 @@ func TodoLine(line string, kw []string, mk string) string {
 
 	p := strings.TrimSpace(line)
 	if !strings.HasPrefix(p, mk1) {
+		if strings.HasPrefix(p, "...") {
+			return p
+		}
 		return ""
-	}
-	if strings.HasPrefix(p, "...") {
-		return p
 	}
 
 	p = strings.TrimSpace(strings.TrimPrefix(p, mk1))
@@ -664,6 +629,9 @@ func TodoLine(line string, kw []string, mk string) string {
 		if key != "" && strings.HasPrefix(p, key) && strings.HasPrefix(p[len(key):], ":") {
 			return p
 		}
+	}
+	if strings.HasPrefix(p, "...") {
+		return p
 	}
 	return ""
 }
@@ -680,6 +648,9 @@ func TodoFind(src string, kw []string, mk string) (string, int) {
 			lineNo++
 			continue
 		}
+		if count == 0 {
+			b.WriteString(VTODO_SEARCH_PREAMBLE + "\n\n")
+		}
 		count++
 		fmt.Fprintf(&b, "%d. %s\n", count, mark)
 		lineNo++
@@ -690,6 +661,7 @@ func TodoFind(src string, kw []string, mk string) (string, int) {
 	if count == 0 {
 		return "", 0
 	}
+	b.WriteString("\nWant me to fix them?")
 	return b.String(), count
 }
 
@@ -731,7 +703,7 @@ func TodoMark(orig string, todos []Todo, mk string) string {
 		b.WriteString(line)
 	}
 	for t < len(copyTodos) {
-		fmt.Fprintf(&b, "%s LINE %d - %s: %s %s\n", mk, copyTodos[t].Line, copyTodos[t].Type, copyTodos[t].Note, mk2)
+		fmt.Fprintf(&b, "%s:%d - %s: %s %s\n", mk, copyTodos[t].Line, copyTodos[t].Type, copyTodos[t].Note, mk2)
 		t++
 	}
 	return b.String()
@@ -748,52 +720,91 @@ func splitMarker(mk string) (string, string) {
 	return strings.TrimSpace(mk), ""
 }
 
-const InfoTemplates = `Respond with these lines and I'll help you:
+// VINFO_MICROFORMAT is auto-generated from x/configure.x in x_config.go.
 
-- ` + "`search|path|words`" + `    Locate words in the code
-- ` + "`review|path|query`" + `    Inspect source from a file
-- ` + "`digest|path|notes`" + `    Write a digest of the file
-- ` + "`memory|topic|thought`" + ` Save a memory for future you
-- ` + "`forget|topic|thought`" + ` Remove a memory for future you
-- ` + "`genius|source|query`" + `   Get advice from top experts
-- ` + "`answer|subject|ideas`" + ` Explain your thought to the user
-
-Lines must be this format or I'll discard them...`
-
-const CodeTemplates = `Respond with as many of these lines as you need:
-
-` + "`search|path|terms`" + ` - Search a portion of the codebase
-` + "`review|path|notes`" + ` - Show the source code of a file
-` + "`digest|path|notes`" + ` - Write a digest of the file
-` + "`memory|topic|notes`" + ` - Save a memory for future you
-` + "`forget|topic|notes`" + ` - Remove a memory for future you
-` + "`answer|path|notes`" + ` - Explain why the file fits
-
-Any other lines will be discarded...`
+// VCODE_MICROFORMAT and VPLAN_REVIEW_DIRECTIVE are auto-generated
+// from x/configure.x in x_config.go.
 
 func InfoList(files []string, note string) string {
 	var b strings.Builder
-	list := files
-	if len(list) == 0 {
-		list = splitLines(VToolFind(""))
+
+	if summaries := toolSummary(files); summaries != "" {
+		b.WriteString("# ")
+		b.WriteString(VINFO_LABEL_CONTEXT)
+		b.WriteString("\n")
+		b.WriteString(summaries)
 	}
 
-	for _, path := range list {
-		if summary := ReadInfo(path); summary != "" {
-			b.WriteString("Remember ")
-			b.WriteString(path)
-			b.WriteString(":\n")
-			b.WriteString(summary)
-			b.WriteString("\n\n")
-		} else {
+	memories := memoryList()
+	if memories != "" {
+		b.WriteString("\n")
+		b.WriteString(memories)
+	}
+	if note != "" {
+		b.WriteString("\n")
+		b.WriteString(note)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func toolSummary(files []string) string {
+	data, err := os.ReadFile(".v-info")
+	if err != nil || len(files) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	for _, path := range files {
+		key := path + "|"
+		found := false
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimLeft(line, " ")
+			if strings.Contains(line, key) {
+				b.WriteString(path)
+				b.WriteString(" ⟵ ")
+				b.WriteString(strings.TrimSpace(strings.TrimPrefix(line, key)))
+				b.WriteByte('\n')
+				found = true
+				break
+			}
+			if strings.HasPrefix(line, "# "+key) {
+				b.WriteString(path)
+				b.WriteString(" ⟵ ")
+				b.WriteString(strings.TrimSpace(strings.TrimPrefix(line, "# "+key)))
+				b.WriteByte('\n')
+				found = true
+				break
+			}
+		}
+		if !found {
 			b.WriteString(path)
 			b.WriteByte('\n')
 		}
 	}
-	if note != "" {
-		b.WriteByte('\n')
-		b.WriteString(note)
-		b.WriteByte('\n')
+	return b.String()
+}
+
+func memoryList() string {
+	info, err := os.ReadFile(".v-info")
+	if err != nil {
+		return ""
+	}
+
+	var b strings.Builder
+	for _, line := range strings.Split(string(info), "\n") {
+		if strings.HasPrefix(line, "# ") {
+			pipe := strings.Index(line, "|")
+			if pipe > 2 {
+				topic := line[2:pipe]
+				note := line[pipe+1:]
+				b.WriteString("# " + VINFO_LABEL_MEMORIES + " ")
+				b.WriteString(topic)
+				b.WriteByte('\n')
+				b.WriteString(note)
+				b.WriteString("\n\n")
+			}
+		}
 	}
 	return b.String()
 }
@@ -801,6 +812,7 @@ func InfoList(files []string, note string) string {
 func InfoShow(files []string, note string) (string, error) {
 	var b strings.Builder
 	for _, path := range files {
+		vOut(VFILE_NOTICE_VIEW, path, note)
 		src, err := FileLoad(path)
 		if err != nil {
 			return "", err
@@ -812,8 +824,11 @@ func InfoShow(files []string, note string) (string, error) {
 			b.WriteString(note)
 			b.WriteString("\n\n")
 		}
-		b.WriteString(WithLineNumbers(src))
-		b.WriteString("\n```\n\n")
+		b.WriteString("```")
+		b.WriteString(FileLang(path))
+		b.WriteByte('\n')
+		b.WriteString(src)
+		b.WriteString("```\n\n")
 	}
 	if note != "" {
 		b.WriteString("\n\n")
@@ -827,7 +842,7 @@ func InfoScan(files []string, note string) (string, error) {
 	if len(files) == 0 {
 		return "", fmt.Errorf("no files")
 	}
-	cfg := CoreConfig()
+	cfg := InfoConfig()
 	list := InfoList(files, note)
 	code, err := InfoShow(files, note)
 	if err != nil {
@@ -836,38 +851,52 @@ func InfoScan(files []string, note string) (string, error) {
 	nut := &peanuts.Peanuts{
 		Persona:  FileInst(files[0], cfg.Keywords, cfg.Instruct),
 		Evidence: list,
-		Analysis: "Okay. Show me the contents of these files...",
+		Analysis: VINFO_REVIEW_REQUEST,
 		Nudging:  code,
-		Updates:  "Okay, so I need to review files first to figure out how to summarize.",
-		Turnout:  InfoTemplates,
-		Safety:   InfoSafety,
+		Updates:  VINFO_REVIEW_ACCEPTED,
+		Turnout:  VINFO_MICROFORMAT,
+		Safety:   infoSafety,
 	}
 	return peanuts.Nutjob(InfoNutmeg(), nut)
 }
 
 func InfoFind(query string) (string, error) {
+	cfg := InfoConfig()
 	list := InfoList(nil, query)
-	quip := fmt.Sprintf("Okay I see the files. But you want me to focus on:\n\n%s", query)
-	need := fmt.Sprintf("Yes. What files do you need to answer this:\n\n%s", query)
+	quip := fmt.Sprintf(VINFO_SEARCH_PREAMBLE+"\n\n%s", query)
+	need := fmt.Sprintf(VINFO_SEARCH_DIRECTIVE+"\n\n%s", query)
 	nut := &peanuts.Peanuts{
-		Persona:  FileInst("", []string{"TODO", "FIXME"}, "You are an architect."),
+		Persona:  FileInst("", cfg.Keywords, cfg.Instruct),
 		Evidence: list,
 		Analysis: quip,
 		Nudging:  need,
-		Updates:  "Okay, so I need to search terms and review the code to figure this out.",
-		Turnout:  "Respond with `review|path|notes` or `search|path|terms`",
-		Safety:   InfoSafety,
+		Updates:  VINFO_SEARCH_ACCEPTED,
+		Turnout:  VINFO_MICROFORMAT,
+		Safety:   infoSafety,
 	}
 	return peanuts.Nutjob(InfoNutmeg(), nut)
 }
 
-func InfoSafety(nut *peanuts.Peanuts, res *string) bool {
+func infoSafety(nut *peanuts.Peanuts, res *string) bool {
+	actions, replies, evidence, answers := infoEvidence(*res)
+	if actions == 0 && replies > 0 {
+		*res = answers.String()
+		return true
+	}
+	nut.Evidence = refreshInfo(nut.Evidence)
+	nut.Analysis = *res
+	nut.Nudging = evidence.String()
+	nut.Updates = VINFO_REVIEW_CONTINUE
+	return false
+}
+
+func infoEvidence(src string) (int, int, strings.Builder, strings.Builder) {
 	actions := 0
 	replies := 0
-	var ans strings.Builder
-	var buf strings.Builder
+	var answers strings.Builder
+	var evidence strings.Builder
 
-	for _, line := range strings.Split(*res, "\n") {
+	for _, line := range strings.Split(src, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "```") {
 			continue
@@ -879,45 +908,109 @@ func InfoSafety(nut *peanuts.Peanuts, res *string) bool {
 		switch verb {
 		case "review":
 			actions++
+			vOut(VFILE_NOTICE_VIEW, term, note)
 			if data, err := FileLoad(term); err == nil {
-				buf.WriteString("\n\n# REVIEW ")
-				buf.WriteString(term)
-				buf.WriteString("\n")
-				buf.WriteString(data)
+				evidence.WriteString("\n\n# REVIEW ")
+				evidence.WriteString(term)
+				evidence.WriteByte('\n')
+				evidence.WriteString("```")
+				evidence.WriteString(FileLang(term))
+				evidence.WriteByte('\n')
+				evidence.WriteString(data)
+				evidence.WriteString("\n```\n\n")
 			}
 		case "search":
 			actions++
-			buf.WriteString("\n\n# SEARCH ")
-			buf.WriteString(term)
-			buf.WriteString("\n")
-			buf.WriteString(VToolGrep(note, term))
-		case "digest", "memory", "forget":
+			evidence.WriteString("\n\n# SEARCH ")
+			evidence.WriteString(term)
+			evidence.WriteByte('\n')
+			evidence.WriteString(vToolGrep(note, term))
+		case "digest", "memory", "forget", "genius":
 			actions++
-			buf.WriteString("\n\n# ")
+			vOut(VFILE_NOTICE_NOTE, term, note)
+			evidence.WriteString("\n\n# ")
 			if verb == "forget" {
-				buf.WriteString("FORGET ")
+				evidence.WriteString("FORGET ")
 			} else {
-				buf.WriteString(verb)
+				evidence.WriteString(verb)
 			}
-			buf.WriteString(" ")
-			buf.WriteString(term)
-			buf.WriteString("\n")
-			buf.WriteString(note)
+			evidence.WriteString(" ")
+			evidence.WriteString(term)
+			evidence.WriteByte('\n')
+			evidence.WriteString(note)
+			switch verb {
+			case "digest":
+				_ = writeInfo(term, note)
+			case "memory":
+				_ = writeInfo("#"+term, note)
+			case "forget":
+				_ = writeInfo("#"+term, "")
+			}
 		case "answer":
 			replies++
-			fmt.Fprintf(&ans, "%s|%s\n", term, note)
+			fmt.Fprintf(&answers, "%s|%s\n", term, note)
 		}
 	}
+	return actions, replies, evidence, answers
+}
 
-	if actions == 0 && replies > 0 {
-		nut.Nudging = ans.String()
-		return true
+func refreshInfo(evidence string) string {
+	files := infoFiles(evidence)
+	if len(files) == 0 {
+		return InfoList(nil, "")
 	}
-	nut.Evidence = InfoList(nil, "")
-	nut.Analysis = *res
-	nut.Nudging = buf.String()
-	nut.Updates = "Okay that helps. But do I have enough info to answer? Let me think about it a bit more."
-	return false
+	return InfoList(files, "")
+}
+
+func infoFiles(src string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, line := range strings.Split(src, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		for _, part := range splitInfoLine(line) {
+			part = strings.TrimSpace(part)
+			if part == "" || seen[part] {
+				continue
+			}
+			seen[part] = true
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func splitInfoLine(line string) []string {
+	var out []string
+	start := 0
+	for start < len(line) {
+		end := len(line)
+		for i := start; i < len(line); i++ {
+			if line[i] == '|' || line[i] == '\n' {
+				end = i
+				break
+			}
+			if i+3 < len(line) && line[i:i+4] == " ⟵ " {
+				end = i
+				break
+			}
+		}
+		part := strings.TrimSpace(line[start:end])
+		if part != "" {
+			out = append(out, part)
+		}
+		if end >= len(line) {
+			break
+		}
+		if line[end] == '|' || line[end] == '\n' {
+			start = end + 1
+			continue
+		}
+		start = end + 4
+	}
+	return out
 }
 
 func parseInfoLine(line string) (string, string, string, bool) {
@@ -943,8 +1036,8 @@ func MarkList(files []string, kw []string) string {
 		if len(kw) == 0 {
 			return b.String()
 		}
-		pattern := strings.Join(kw, "|")
-		b.WriteString(VToolGrep(pattern, ""))
+		pattern := "(" + strings.Join(kw, "|") + ")"
+		b.WriteString(vToolGrep(pattern, ""))
 		return b.String()
 	}
 
@@ -970,13 +1063,13 @@ func MarkEach(files []string, goal string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		files = AnswerFiles(code)
+		files = answerFiles(code)
 		if len(files) == 0 {
-			return "", fmt.Errorf("no files found for: %s", goal)
+			return "", fmt.Errorf(VFILE_NOTICE_GOAL, goal)
 		}
 	}
 
-	target, err := MarkTarget(files, goal)
+	target, err := markTarget(files, goal)
 	if err != nil {
 		return "", err
 	}
@@ -984,31 +1077,36 @@ func MarkEach(files []string, goal string) (string, error) {
 	nut := &peanuts.Peanuts{
 		Persona:  FileInst(files[0], cfg.Keywords, cfg.Instruct),
 		Evidence: target,
-		Analysis: "Okay. I see the source code. But what are your goals?",
+		Analysis: VMARK_SEARCH_REQUEST,
 		Nudging:  goal,
 		Updates:  goal,
-		Turnout:  FileInst(files[0], cfg.Keywords, "Return ONLY strict insert points like: `filename|line|TYPE|comment` (of these types: {{keywords}})"),
-		Safety:   MarkSafety,
+		Turnout:  FileInst(files[0], cfg.Keywords, VMARK_MICROFORMAT),
+		Safety:   markSafety,
 	}
 	return peanuts.Nutjob(MarkNutmeg(), nut)
 }
 
-func MarkTarget(files []string, goal string) (string, error) {
+func markTarget(files []string, goal string) (string, error) {
 	var b strings.Builder
 	for _, path := range files {
+		vOut(VFILE_NOTICE_READ, path)
 		src, err := FileLoad(path)
 		if err != nil {
 			return "", err
 		}
-		b.WriteString(WithLineNumbers(src))
+		b.WriteString(path)
+		b.WriteString("\n```")
+		b.WriteString(FileLang(path))
 		b.WriteByte('\n')
+		b.WriteString(withLineNumbers(src))
+		b.WriteString("```\n\n")
 	}
 	b.WriteString(goal)
 	return b.String(), nil
 }
 
-func MarkSafety(nut *peanuts.Peanuts, res *string) bool {
-	marks, ok := ParseMarks(*res)
+func markSafety(nut *peanuts.Peanuts, res *string) bool {
+	marks, ok := parseMarks(*res)
 	if !ok || len(marks) == 0 {
 		return false
 	}
@@ -1023,26 +1121,28 @@ func MarkSafety(nut *peanuts.Peanuts, res *string) bool {
 		if err != nil {
 			return false
 		}
-		updated := MarkSource(src, byPath[path], FileMark(path))
+		updated := markSource(src, byPath[path], FileMark(path))
 		if updated == "" {
 			return false
 		}
 		if _, err := FileSave(path, updated); err != nil {
 			return false
 		}
+		vOut(VFILE_NOTICE_EDIT, path)
 	}
+	vOut(VFILE_NOTICE_MARK, len(marks))
 	nut.Nudging = fmt.Sprintf("Added %d new comments.", len(marks))
 	return true
 }
 
-func ParseMarks(src string) ([]Mark, bool) {
+func parseMarks(src string) ([]Mark, bool) {
 	var marks []Mark
 	for _, line := range strings.Split(src, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "```") {
 			continue
 		}
-		mark, ok := ParseMark(line)
+		mark, ok := parseMark(line)
 		if !ok {
 			return nil, false
 		}
@@ -1052,7 +1152,7 @@ func ParseMarks(src string) ([]Mark, bool) {
 	return marks, true
 }
 
-func ParseMark(line string) (Mark, bool) {
+func parseMark(line string) (Mark, bool) {
 	parts := strings.SplitN(line, "|", 4)
 	if len(parts) != 4 {
 		return Mark{}, false
@@ -1064,7 +1164,7 @@ func ParseMark(line string) (Mark, bool) {
 	return Mark{Line: lineNo, Path: strings.TrimSpace(parts[1]), Type: strings.TrimSpace(parts[2]), Note: strings.TrimSpace(parts[3])}, true
 }
 
-func MarkSource(src string, marks []Mark, mk string) string {
+func markSource(src string, marks []Mark, mk string) string {
 	if src == "" || len(marks) == 0 || mk == "" {
 		return ""
 	}
@@ -1092,27 +1192,32 @@ func MarkSource(src string, marks []Mark, mk string) string {
 		if mk1 == "" {
 			mk1 = mk
 		}
-		fmt.Fprintf(&b, "%s LINE %d - %s: %s %s\n", mk1, copyMarks[m].Line, copyMarks[m].Type, copyMarks[m].Note, mk2)
+		fmt.Fprintf(&b, "%s:%d - %s: %s %s\n", mk, copyMarks[m].Line, copyMarks[m].Type, copyMarks[m].Note, mk2)
 		m++
 	}
 	return b.String()
 }
 
-func ReadInfo(path string) string {
+func readInfo(path string) string {
 	data, err := os.ReadFile(".v-info")
 	if err != nil {
 		return ""
 	}
-	key := "# " + path + " |"
+	key := path + "|"
+	legacy := "# " + path + " |"
 	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimLeft(line, " ")
 		if strings.HasPrefix(line, key) {
 			return strings.TrimSpace(strings.TrimPrefix(line, key))
+		}
+		if strings.HasPrefix(line, legacy) {
+			return strings.TrimSpace(strings.TrimPrefix(line, legacy))
 		}
 	}
 	return ""
 }
 
-func WriteInfo(path, note string) error {
+func writeInfo(path, note string) error {
 	data := ""
 	if existing, err := os.ReadFile(".v-info"); err == nil {
 		data = string(existing)
@@ -1121,21 +1226,22 @@ func WriteInfo(path, note string) error {
 	scanner := bufio.NewScanner(strings.NewReader(data))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "# "+path+" |") {
+		if line == "" || strings.HasPrefix(line, path+"|") || strings.HasPrefix(line, "# "+path+" |") {
 			continue
 		}
 		b.WriteString(line)
 		b.WriteByte('\n')
 	}
-	b.WriteString("# ")
-	b.WriteString(path)
-	b.WriteString(" | ")
-	b.WriteString(note)
-	b.WriteByte('\n')
+	if note != "" {
+		b.WriteString(path)
+		b.WriteString("|")
+		b.WriteString(note)
+		b.WriteByte('\n')
+	}
 	return os.WriteFile(".v-info", []byte(b.String()), 0o666)
 }
 
-func AnswerFiles(src string) []string {
+func answerFiles(src string) []string {
 	var out []string
 	for _, line := range strings.Split(src, "\n") {
 		line = strings.TrimSpace(line)
@@ -1143,8 +1249,14 @@ func AnswerFiles(src string) []string {
 			continue
 		}
 		parts := strings.SplitN(line, "|", 3)
-		if len(parts) == 3 && strings.TrimSpace(parts[0]) == "answer" {
-			out = append(out, strings.TrimSpace(parts[1]))
+		if len(parts) >= 2 {
+			fname := strings.TrimSpace(parts[0])
+			if fname == "answer" && len(parts) == 3 {
+				fname = strings.TrimSpace(parts[1])
+			}
+			if fname != "" {
+				out = append(out, fname)
+			}
 		}
 	}
 	return out
@@ -1159,27 +1271,23 @@ func sortMarks(marks []Mark) {
 	})
 }
 
-func filepathJoin(a, b string) string {
-	return filepath.Join(a, b)
-}
-
 func CodeScan(src string, kw []string, mk string) (string, int) {
 	return TodoFind(src, kw, mk)
 }
 
 func CodeFind(quest string) (string, error) {
-	cfg := CoreConfig()
+	cfg := InfoConfig()
 	list := InfoList(nil, quest)
-	quip := fmt.Sprintf("Okay I see the files. But you want me to focus on:\n\n%s", quest)
-	need := fmt.Sprintf("Search the codebase to answer:\n\n%s\n\nThen list the files as `answer|filename|comment` after you do you research.\n\n", quest)
+	quip := fmt.Sprintf(VCODE_SEARCH_PREAMBLE+"\n\n%s", quest)
+	need := fmt.Sprintf(VCODE_SEARCH_DIRECTIVE+"\n\n%s\n\n"+VCODE_SEARCH_FORMAT+"\n\n", quest)
 	nut := &peanuts.Peanuts{
 		Persona:  FileInst("", cfg.Keywords, cfg.Instruct),
 		Evidence: list,
 		Analysis: quip,
 		Nudging:  need,
-		Updates:  "Okay, so I need to search code first to figure this out. Let me think about what make the most sense.",
-		Turnout:  CodeTemplates,
-		Safety:   CodeSafety,
+		Updates:  VCODE_SEARCH_ACCEPTED,
+		Turnout:  VCODE_MICROFORMAT,
+		Safety:   codeSearch,
 	}
 	return peanuts.Nutjob(InfoNutmeg(), nut)
 }
@@ -1194,8 +1302,9 @@ func CodeFile(filename, goal string) error {
 	if err != nil {
 		return err
 	}
-	inst := FileInst(filename, CoreConfig().Keywords, CoreConfig().Instruct)
-	list, count := CodeScan(code, CoreConfig().Keywords, mk)
+	cfg := InfoConfig()
+	inst := FileInst(filename, cfg.Keywords, cfg.Instruct)
+	list, count := CodeScan(code, cfg.Keywords, mk)
 	if count == 0 && goal != "" {
 		if _, err := MarkEach([]string{filename}, goal); err != nil {
 			return err
@@ -1204,13 +1313,13 @@ func CodeFile(filename, goal string) error {
 		if err != nil {
 			return err
 		}
-		list, count = CodeScan(code, CoreConfig().Keywords, mk)
+		list, count = CodeScan(code, cfg.Keywords, mk)
 	}
 	if count == 0 {
-		return fmt.Errorf("no comments found in `%s`", filename)
+		return fmt.Errorf(VFILE_NOTICE_DONE, filename)
 	}
 
-	todo := "Okay...\n\nI found these comments:\n\n" + list + "\n\nAre we ready to address the comments?"
+	todo := VCODE_SOURCE_ACCEPTED + "\n\n" + list + "\n\n" + VCODE_SOURCE_CONTINUE
 	nut := &peanuts.Peanuts{
 		Persona:  inst,
 		Evidence: goal,
@@ -1218,47 +1327,332 @@ func CodeFile(filename, goal string) error {
 		Nudging:  code,
 		Updates:  todo,
 		Turnout:  inst,
-		Safety:   CodeSafety,
+		Safety:   codeWrites,
 	}
 	src, err := peanuts.Nutjob(CodeNutmeg(), nut)
 	if err != nil {
 		return err
 	}
 	_, err = FileSave(filename, src)
-	return err
+	if err != nil {
+		return err
+	}
+	vOut(VFILE_NOTICE_EDIT, filename)
+	return nil
 }
 
-func CodeSafety(nut *peanuts.Peanuts, res *string) bool {
-	actions := 0
-	replies := 0
-	var ans strings.Builder
-
-	for _, line := range strings.Split(*res, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "```") {
-			continue
-		}
-		verb, term, note, ok := parseInfoLine(line)
-		if !ok {
-			continue
-		}
-		switch verb {
-		case "search", "review", "digest", "memory", "forget":
-			actions++
-		case "answer":
-			replies++
-			fmt.Fprintf(&ans, "%s|%s\n", term, note)
-		}
-	}
-
+func codeSearch(nut *peanuts.Peanuts, res *string) bool {
+	actions, replies, _, answers := infoEvidence(*res)
 	if actions == 0 && replies > 0 {
-		nut.Nudging = "# REMEMBER THESE FILES\nInclude them in your output...\n\n" + ans.String()
+		*res = answers.String()
 		return true
 	}
-	if actions > 0 {
-		nut.Analysis = *res
-		nut.Nudging = "# REMEMBER THESE FILES\nInclude them in your output...\n\n" + ans.String()
-		return false
+	nut.Analysis = *res
+	nut.Nudging = "# " + VCODE_SOURCE_PREAMBLE + "\n" + VCODE_SOURCE_DIRECTIVE + "\n\n" + answers.String()
+	return false
+}
+
+// codeWrites is a safety callback for CodeFile that checks the AI response
+// for keyword markers (e.g. "// TODO:", "# FIXME:"). If any are found, the
+// response is accepted as the file content. Equivalent to C's _vcode_writes.
+func codeWrites(nut *peanuts.Peanuts, res *string) bool {
+	_, count := vMarkscan(*res, CodeConfig().Keywords, nut.Analysis)
+	return count > 0
+}
+
+// PlanSearch is a safety callback for PlanMore that handles info actions
+// (search, review, digest, memory, forget) during the research phase, then
+// switches to planUpdate when the AI answers. Equivalent to C's _vplan_search.
+func planSearch(nut *peanuts.Peanuts, res *string) bool {
+	actions, replies, evidence, answers := infoEvidence(*res)
+	if actions == 0 && replies > 0 {
+		nut.Updates = VPLAN_SEARCH_CONTINUE
+		nut.Turnout = VPLAN_MICROFORMAT
+		nut.Safety = planUpdate
+	}
+
+	evidence.WriteString("# " + VPLAN_SOURCE_PREAMBLE + "\n" + VPLAN_SOURCE_DIRECTIVE + "\n\n")
+	evidence.WriteString(answers.String())
+
+	nut.Analysis = *res
+	nut.Nudging = evidence.String()
+	return false
+}
+
+// PlanUpdate is the second-phase safety for PlanMore. It validates and saves
+// the plan. Equivalent to C's _vplan_update.
+func planUpdate(nut *peanuts.Peanuts, res *string) bool {
+	plan := parsePlan(*res)
+	if len(plan.Steps) > 0 {
+		PlanSave(plan)
+		return true
 	}
 	return false
+}
+
+func PlanLoad() *Plan {
+	data, err := os.ReadFile(VFILENAME_PLAN)
+	if err != nil {
+		return &Plan{}
+	}
+	return parsePlan(string(data))
+}
+
+func parsePlan(src string) *Plan {
+	plan := &Plan{}
+	lines := strings.Split(src, "\n")
+	if len(lines) == 0 {
+		return plan
+	}
+
+	plan.Title = strings.TrimSpace(lines[0])
+	if len(lines) > 1 && strings.HasPrefix(lines[1], "---") {
+		idx := 2
+		for ; idx < len(lines); idx++ {
+			line := strings.TrimSpace(lines[idx])
+			if line == "" {
+				continue
+			}
+			if strings.HasPrefix(line, "- [") {
+				break
+			}
+			plan.Goals += line + "\n"
+		}
+		plan.Goals = strings.TrimSpace(plan.Goals)
+
+		for ; idx < len(lines); idx++ {
+			line := lines[idx]
+			if !strings.HasPrefix(line, "- [") {
+				break
+			}
+			step := parseStep(line)
+			if step == nil {
+				continue
+			}
+			for idx+1 < len(lines) && strings.HasPrefix(lines[idx+1], "  - `") {
+				idx++
+				file := strings.TrimSpace(strings.TrimPrefix(lines[idx], "  - `"))
+				file = strings.Trim(file, "`")
+				step.Files = append(step.Files, file)
+			}
+			plan.Steps = append(plan.Steps, *step)
+		}
+
+		idx++
+		for ; idx < len(lines); idx++ {
+			line := strings.TrimSpace(lines[idx])
+			if line == "" {
+				continue
+			}
+			plan.Notes += line + "\n"
+		}
+		plan.Notes = strings.TrimSpace(plan.Notes)
+	}
+	return plan
+}
+
+func parseStep(line string) *Step {
+	if !strings.HasPrefix(line, "- [") {
+		return nil
+	}
+	closed := strings.Index(line, "] ")
+	if closed == -1 {
+		return nil
+	}
+	done := line[3] == 'x'
+	task := strings.TrimSpace(line[closed+2:])
+
+	return &Step{
+		Done: done,
+		Task: task,
+	}
+}
+
+func PlanText(plan *Plan) string {
+	if plan == nil {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(plan.Title)
+	b.WriteString("\n---\n")
+	if plan.Goals != "" {
+		b.WriteString(plan.Goals)
+		b.WriteString("\n")
+	}
+
+	for _, step := range plan.Steps {
+		if step.Done {
+			b.WriteString("\n- [x] ")
+		} else {
+			b.WriteString("\n- [ ] ")
+		}
+		b.WriteString(step.Task)
+		b.WriteString("\n")
+		for _, file := range step.Files {
+			b.WriteString("  - `")
+			b.WriteString(file)
+			b.WriteString("`\n")
+		}
+	}
+
+	if plan.Notes != "" {
+		b.WriteString("\n")
+		b.WriteString(plan.Notes)
+	}
+
+	return b.String()
+}
+
+func PlanSave(plan *Plan) error {
+	text := PlanText(plan)
+	return os.WriteFile(VFILENAME_PLAN, []byte(text), 0o666)
+}
+
+func PlanNext(plan *Plan) bool {
+	if plan == nil {
+		return false
+	}
+	for i := range plan.Steps {
+		step := &plan.Steps[i]
+		if step.Done || len(step.Files) == 0 {
+			continue
+		}
+		_, _ = MarkEach(step.Files, step.Task)
+		for _, file := range step.Files {
+			_ = CodeFile(file, step.Task)
+		}
+		step.Done = true
+		_ = PlanSave(plan)
+		return true
+	}
+	return false
+}
+
+func PlanExec(plan *Plan) int {
+	if plan == nil {
+		return 0
+	}
+	count := 0
+	for PlanNext(plan) {
+		count++
+	}
+	return count
+}
+
+func PlanMore(goal string) string {
+	plan, _ := FileLoad(VFILENAME_PLAN)
+	list := InfoList(nil, plan)
+	cfg := InfoConfig()
+	quip := fmt.Sprintf(VPLAN_SEARCH_PREAMBLE+"\n\n%s", goal)
+	need := fmt.Sprintf(VPLAN_SEARCH_DIRECTIVE+"\n\n%s\n\n"+VPLAN_SEARCH_FORMAT+"\n\n", goal)
+	nut := &peanuts.Peanuts{
+		Persona:  FileInst("", cfg.Keywords, cfg.Instruct),
+		Evidence: list,
+		Analysis: quip,
+		Nudging:  need,
+		Updates:  VPLAN_SEARCH_ACCEPTED,
+		Turnout:  VCODE_MICROFORMAT,
+		Safety:   planSearch,
+	}
+	result, err := peanuts.Nutjob(InfoNutmeg(), nut)
+	if err != nil {
+		return ""
+	}
+	return result
+}
+
+func PlanTask(files []string, goal string) string {
+	info, _ := InfoScan(files, "")
+	need := fmt.Sprintf("%s\n\n# %s\n\n%s", goal, VPLAN_SEARCH_DIRECTIVE, info)
+	return PlanMore(need)
+}
+
+func PlanTodo(files []string, goal string) string {
+	plan, _ := FileLoad(VFILENAME_PLAN)
+	need := goal + "\n\n# " + VPLAN_REVIEW_DIRECTIVE + "\n\n" + plan
+	result, _ := InfoScan(files, need)
+	return result
+}
+
+func PlanWipe() {
+	os.Remove(VFILENAME_PLAN)
+}
+
+func VPlanWipe() {
+	PlanWipe()
+}
+
+func VPlanLoad() *Plan {
+	return PlanLoad()
+}
+
+func VPlanText(plan *Plan) string {
+	return PlanText(plan)
+}
+
+func VPlanSave(plan *Plan) error {
+	return PlanSave(plan)
+}
+
+func VPlanNext(plan *Plan) bool {
+	return PlanNext(plan)
+}
+
+func VPlanExec(plan *Plan) int {
+	return PlanExec(plan)
+}
+
+func VPlanMore(goal string) string {
+	return PlanMore(goal)
+}
+
+func VPlanTask(files []string, goal string) string {
+	return PlanTask(files, goal)
+}
+
+func VPlanTodo(files []string, goal string) string {
+	return PlanTodo(files, goal)
+}
+
+func VMarkscan(src string, kw []string, mk string) (string, int) {
+	return vMarkscan(src, kw, mk)
+}
+
+// VfenceChk checks whether s is wrapped in code fences (```...```),
+// ignoring leading/trailing whitespace. Ported from C vfence_chk.
+func VfenceChk(s string) bool {
+	p := strings.TrimLeft(s, " \t\r\n")
+	if !strings.HasPrefix(p, "```") {
+		return false
+	}
+	// Find last non-whitespace character index (matching C's pointer arithmetic).
+	last := len(s) - 1
+	for last >= 0 && (s[last] == ' ' || s[last] == '\t' || s[last] == '\r' || s[last] == '\n') {
+		last--
+	}
+	if last < 3 {
+		return false
+	}
+	return s[last-2:last+1] == "```"
+}
+
+// VfenceClr strips outer code fences from s and returns the content
+// between them, or empty if not fenced. Ported from C vfence_clr.
+// Unlike C, this returns a copy (no buffer mutation).
+func VfenceClr(s string) string {
+	p := strings.TrimLeft(s, " \t\r\n")
+	if !strings.HasPrefix(p, "```") {
+		return ""
+	}
+	nl := strings.IndexByte(p, '\n')
+	if nl < 0 {
+		return ""
+	}
+	body := p[nl+1:]
+	last := strings.TrimRight(body, " \t\r\n")
+	if !strings.HasSuffix(last, "```") {
+		return ""
+	}
+	return strings.TrimSuffix(last, "```")
 }

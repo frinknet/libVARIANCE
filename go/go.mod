@@ -1,6 +1,6 @@
 // (c) 2026 FRINKnet & Friends - MIT Licence
 
-module github.com/frinknet/libVARIANCE/go
+module github.com/frinknet/libvariance/go
 
 go 1.22
 

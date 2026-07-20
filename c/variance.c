@@ -151,6 +151,7 @@ static inline char *_vtool_summary(const char **files, int n) {
 			char *end = strchr(p, '\n');
 
 			if (end) {
+				*end = '\0';
 				v_bufwrite(&buf, &len, files[i], &max);
 				v_bufwrite(&buf, &len, " ⟵ ", &max);
 				v_bufwrite(&buf, &len, p, &max);
